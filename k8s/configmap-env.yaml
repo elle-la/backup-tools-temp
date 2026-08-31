@@ -1,0 +1,15 @@
+# Created imperatively with:
+#   kubectl create configmap backup-env-config \
+#     --from-literal=RETENTION_DAYS=7 \
+#     --from-literal=BACKUP_PREFIX=prod \
+#     --from-literal=POLL_SECONDS=5
+#
+# Declarative version kept here for reference / repeatability.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-env-config
+data:
+  RETENTION_DAYS: "7"
+  BACKUP_PREFIX: "prod"
+  POLL_SECONDS: "5"

@@ -1,0 +1,13 @@
+# Created imperatively with:
+#   kubectl create configmap backup-file-config \
+#     --from-file=backup.conf
+#
+# Declarative version kept here for reference / repeatability.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backup-file-config
+data:
+  backup.conf: |
+    # backup-tool file-based config
+    COMPRESSION_LEVEL=6

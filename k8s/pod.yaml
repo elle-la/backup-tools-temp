@@ -1,0 +1,89 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: backup-tool
+  labels:
+    app: backup-tool
+spec:
+  # Pinned to a specific node on purpose: hostPath only ever resolves on
+  # whatever node the Pod actually lands on. In this lab that's node1 or
+  # node2 (10.0.1.102 / 10.0.1.103) - the workstation (10.0.1.104) where
+  # kubectl runs and the repo lives is NOT a cluster node, and the
+  # control-plane node is tainted NoSchedule by default. Pinning here
+  # means the directory the learner populates below is always the one
+  # the Pod actually reads from, instead of depending on where the
+  # scheduler happens to place an unpinned Pod.
+  nodeName: node1
+  containers:
+    - name: backup-tool
+      # Pulled from the local registry hosted on the workstation (see the
+      # CloudFormation UserData for PublicInstance0) - build/tag/push happens
+      # separately, this just needs to match wherever that ends up:
+      #   docker build -t backup-tool:latest .
+      #   docker tag backup-tool:latest 10.0.1.104:5000/backup-tool:latest
+      #   docker push 10.0.1.104:5000/backup-tool:latest
+      image: 10.0.1.104:5000/backup-tool:latest
+      imagePullPolicy: IfNotPresent
+      # The directory to watch is passed explicitly here rather than relying
+      # on the DATA_DIR default/env var - point this at whatever mountPath
+      # you used below and nothing else needs to change.
+      args: ["watch", "/uploads"]
+
+      # --- ConfigMap #1: mounted as environment variables ---
+      envFrom:
+        - configMapRef:
+            name: backup-env-config
+
+      volumeMounts:
+        # "Upload location" - hostPath here plays the same role the bind
+        # mount plays in the Docker walkthrough: drop files in on the host/node
+        # and the running container picks them up on its next poll.
+        - name: data
+          mountPath: /uploads
+
+        # Destination for archives - survives container restarts within
+        # the Pod the same way the named volume did in Docker. (For
+        # archives to survive Pod deletion too, back this with a
+        # PersistentVolumeClaim instead of emptyDir - noted below.)
+        - name: backups
+          mountPath: /backups
+
+        # --- ConfigMap #2: mounted as a projected file ---
+        - name: file-config
+          mountPath: /etc/backup-tool/backup.conf
+          subPath: backup.conf
+          readOnly: true
+
+        # --- Secret: mounted as a file, not an env var ---
+        - name: secret-passphrase
+          mountPath: /etc/backup-tool/secrets
+          readOnly: true
+
+  volumes:
+    # Fixed path on node1 (not the workstation!) - because this Pod is
+    # pinned above, this path is deterministic. Before applying this
+    # manifest, create it on node1 itself, e.g. from the workstation:
+    #   sshpass -p '<password>' ssh cloud_user@10.0.1.102 \
+    #     "mkdir -p /home/cloud_user/backup-tool/data"
+    # Writing to ./data in the repo on the workstation does NOT reach
+    # this directory - they're two different machines.
+    - name: data
+      hostPath:
+        path: /home/cloud_user/backup-tool/data
+        type: DirectoryOrCreate
+
+    - name: backups
+      emptyDir: {}
+      # Swap the line above for the block below to make archives survive
+      # Pod deletion too, not just container restarts within the Pod:
+      # persistentVolumeClaim:
+      #   claimName: backup-archives-pvc
+
+    - name: file-config
+      configMap:
+        name: backup-file-config
+
+    - name: secret-passphrase
+      secret:
+        secretName: backup-passphrase
+        defaultMode: 0400
