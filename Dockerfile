@@ -1,7 +1,10 @@
 FROM python:3.12-alpine
 
-# gnupg gives us `gpg` for optional passphrase-based archive encryption
-RUN apk add --no-cache gnupg
+# gnupg gives us `gpg` for optional passphrase-based archive encryption.
+# tar is required by `kubectl cp` (it exec's tar inside the container to
+# stream files in/out) - Alpine's busybox usually provides it, but this
+# makes it explicit rather than relying on that.
+RUN apk add --no-cache gnupg tar
 
 COPY backup_tool.py /usr/local/bin/backup_tool.py
 RUN chmod +x /usr/local/bin/backup_tool.py

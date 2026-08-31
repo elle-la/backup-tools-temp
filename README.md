@@ -14,10 +14,11 @@ by the time you log in - run everything below from there.
 
 The workstation is *not* a cluster node. The Kubernetes cluster is the
 controller (10.0.1.101, control-plane, tainted so it won't run workloads)
-plus node1 (10.0.1.102) and node2 (10.0.1.103). That separation matters in
-Act 3: anything a Pod's `hostPath` volume reads has to exist on whichever
-node the Pod is actually running on, not on the workstation where this repo
-lives. More on that below.
+plus node1 (10.0.1.102) and node2 (10.0.1.103) - and there's no shared
+filesystem between any of them. Act 3 works around that by using
+`kubectl cp` to copy a file from the workstation straight into the running
+container, rather than relying on a directory that would need to live on
+whichever node the Pod happens to land on.
 
 A local, unauthenticated Docker registry is already running on the
 workstation at `10.0.1.104:5000`, and node1/node2's containerd is already
@@ -52,9 +53,8 @@ which run entirely on the workstation (it has Docker installed, so this
 works exactly like a normal local Docker setup). It's empty (just a
 `.gitkeep`) until you start writing to it below.
 
-Act 3 does **not** use this `data/` directory - see the topology note above
-and the walkthrough below for why, and where the equivalent directory
-actually needs to live instead.
+Act 3 does **not** use this `data/` directory directly - it copies a file
+out of it into the running Pod with `kubectl cp` instead (see below).
 
 ## Build and push
 
@@ -115,9 +115,11 @@ docker volume inspect backup-archives
 
 ## Act 3 - move to Kubernetes
 
-The Pod spec (`k8s/pod.yaml`) is pinned to `node1` on purpose, and its image
-already points at `10.0.1.104:5000/backup-tool:latest` (the registry from
-"Build and push" above) - nothing to substitute at apply time.
+The Pod spec (`k8s/pod.yaml`) isn't pinned to any particular node - its
+`/uploads` volume is an `emptyDir`, populated via `kubectl cp` rather than
+a live host mount, so it doesn't matter which node the Pod lands on. Its
+image already points at `10.0.1.104:5000/backup-tool:latest` (the registry
+from "Build and push" above) - nothing to substitute at apply time.
 
 ```bash
 kubectl create configmap backup-env-config \
@@ -129,19 +131,7 @@ kubectl create configmap backup-file-config --from-file=backup.conf
 
 kubectl create secret generic backup-passphrase \
   --from-literal=passphrase='correct-horse-battery-staple'
-```
 
-Before applying the Pod, create the directory it expects - **on node1**,
-not the workstation, since that's where the Pod is pinned and `hostPath`
-only ever resolves locally on whichever node the Pod runs on:
-
-```bash
-# Run from the workstation - it already has sshpass and the node's password
-sshpass -p '<password>' ssh -o StrictHostKeyChecking=no cloud_user@10.0.1.102 \
-  "mkdir -p /home/cloud_user/backup-tool/data"
-```
-
-```bash
 kubectl apply -f k8s/pod.yaml
 
 # env-var ConfigMap
@@ -150,11 +140,12 @@ kubectl exec backup-tool -- printenv RETENTION_DAYS BACKUP_PREFIX POLL_SECONDS
 # file-mounted ConfigMap
 kubectl exec backup-tool -- cat /etc/backup-tool/backup.conf
 
-# Secret in action - drop a file into the directory on node1 (again, not the
-# workstation's local ./data - that's a different machine and the Pod never
-# sees it)
-sshpass -p '<password>' ssh -o StrictHostKeyChecking=no cloud_user@10.0.1.102 \
-  "echo 'hello from node1' > /home/cloud_user/backup-tool/data/note.txt"
+# Secret in action - copy a file from the workstation straight into the
+# running container's /uploads directory (this is the one step that
+# behaves differently from Docker's live bind mount: it's a one-time copy,
+# not something the running Pod watches for automatically)
+echo "hello from the workstation" > ./data/note.txt
+kubectl cp ./data/note.txt backup-tool:/uploads/note.txt
 
 kubectl exec backup-tool -- backup-tool list      # newest entry ends in .gpg
 
@@ -162,6 +153,6 @@ kubectl logs backup-tool     # watch mode noticing the file and encrypting it
 ```
 
 Point the Pod at a different directory without touching the image by
-changing three things together: `nodeName`, the volume's `hostPath`, and
-the container's `args`/matching `mountPath` - and remember to create the
-new directory on whichever node you pick before the Pod starts.
+changing the container's `args` and the matching `mountPath` together,
+e.g. `args: ["watch", "/incoming"]` with `mountPath: /incoming` - and
+`kubectl cp` into that new path instead of `/uploads`.

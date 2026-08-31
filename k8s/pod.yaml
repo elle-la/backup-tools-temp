@@ -5,15 +5,6 @@ metadata:
   labels:
     app: backup-tool
 spec:
-  # Pinned to a specific node on purpose: hostPath only ever resolves on
-  # whatever node the Pod actually lands on. In this lab that's node1 or
-  # node2 (10.0.1.102 / 10.0.1.103) - the workstation (10.0.1.104) where
-  # kubectl runs and the repo lives is NOT a cluster node, and the
-  # control-plane node is tainted NoSchedule by default. Pinning here
-  # means the directory the learner populates below is always the one
-  # the Pod actually reads from, instead of depending on where the
-  # scheduler happens to place an unpinned Pod.
-  nodeName: node1
   containers:
     - name: backup-tool
       # Pulled from the local registry hosted on the workstation (see the
@@ -35,9 +26,11 @@ spec:
             name: backup-env-config
 
       volumeMounts:
-        # "Upload location" - hostPath here plays the same role the bind
-        # mount plays in the Docker walkthrough: drop files in on the host/node
-        # and the running container picks them up on its next poll.
+        # "Upload location" - an emptyDir, populated via `kubectl cp` from
+        # the workstation rather than a live host directory (the Pod can
+        # land on any node, and the workstation isn't one of them, so
+        # there's no shared filesystem to bind-mount here the way Docker
+        # could on a single machine).
         - name: data
           mountPath: /uploads
 
@@ -60,17 +53,12 @@ spec:
           readOnly: true
 
   volumes:
-    # Fixed path on node1 (not the workstation!) - because this Pod is
-    # pinned above, this path is deterministic. Before applying this
-    # manifest, create it on node1 itself, e.g. from the workstation:
-    #   sshpass -p '<password>' ssh cloud_user@10.0.1.102 \
-    #     "mkdir -p /home/cloud_user/backup-tool/data"
-    # Writing to ./data in the repo on the workstation does NOT reach
-    # this directory - they're two different machines.
+    # emptyDir instead of hostPath: this Pod isn't pinned to a specific
+    # node, so there's no single node filesystem path to point at. Data
+    # gets in via `kubectl cp` (see README) rather than a live mount - it
+    # won't survive Pod deletion, only container restarts within the Pod.
     - name: data
-      hostPath:
-        path: /home/cloud_user/backup-tool/data
-        type: DirectoryOrCreate
+      emptyDir: {}
 
     - name: backups
       emptyDir: {}
