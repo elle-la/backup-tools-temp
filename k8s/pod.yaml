@@ -15,10 +15,14 @@ spec:
       #   docker push 10.0.1.104:5000/backup-tool:latest
       image: 10.0.1.104:5000/backup-tool:latest
       imagePullPolicy: IfNotPresent
-      # The directory to watch is passed explicitly here rather than relying
-      # on the DATA_DIR default/env var - point this at whatever mountPath
-      # you used below and nothing else needs to change.
-      args: ["watch", "/uploads"]
+      # IMPORTANT: this image has no ENTRYPOINT, only a CMD - Kubernetes'
+      # `args` replaces CMD outright rather than appending to some assumed
+      # program name. Omitting "backup-tool" here would run the literal
+      # command `watch /uploads`, which Alpine's busybox happily accepts
+      # as ITS OWN unrelated `watch` utility (retry a shell command every
+      # N seconds) instead of this app's `watch` subcommand - silently
+      # never starting the actual backup tool at all.
+      args: ["backup-tool", "watch", "/uploads"]
 
       # --- ConfigMap #1: mounted as environment variables ---
       envFrom:
